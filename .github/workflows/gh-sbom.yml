@@ -1,0 +1,48 @@
+name: SBOM Producer
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0 * * * # Everyday at 0000 UTC
+
+permissions: read-all
+
+jobs:
+  produce-sbom-from-github-dependency-graph:
+    runs-on: ubuntu-latest
+    environment: sbom
+    env:
+      SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: advanced-security/sbom-generator-action@v0.0.1
+        id: sbom
+        env: 
+          GITHUB_TOKEN: ${{ github.token }}
+      
+      - name: Add deployment SSH private key to agent
+        run: |
+          ssh-agent -a ${{ env.SSH_AUTH_SOCK }} > /dev/null
+          ssh-add - <<< "${{ secrets.SSH_PRIVATE_KEY }}"
+          echo ${{ env.SSH_AUTH_SOCK }}
+          
+      - name: Push SBOM to remote
+        env:
+          # Target repo to upload SBOM file 
+          REMOTE_REPO_URL: git@github.com:chains-project/sbom-files.git
+          GIT_USER: github-actions[bot]@users.noreply.github.com
+          GIT_EMAIL: github-actions[bot]
+        run: |
+          git config --global user.name "${{ env.GIT_USER }}"
+          git config --global user.email "${{ env.GIT_EMAIL }}"
+          git clone $REMOTE_REPO_URL
+          mkdir -p sbom-files/frozen-spoon/github/
+          # We do not store hash in the file name because it will always be the same
+          # since frozen-spoon is immutable
+          cp ${{ steps.sbom.outputs.fileName }} sbom-files/frozen-spoon/github/$(date '+%Y-%m-%d').sbom.json
+          cd sbom-files
+          git add .
+          git commit -m "GH SBOM (spoon): $(date '+%Y-%m-%d')"
+          git push
